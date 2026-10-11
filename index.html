@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PNG Maker App</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      text-align: center;
+      padding: 2.5rem 1rem;
+      margin: 0;
+    }
+    h1 { color: #38bdf8; margin-bottom: 0.25rem; font-size: 2.2rem; }
+    p.subtitle { color: #94a3b8; margin-bottom: 1.5rem; font-size: 1rem; }
+
+    .mode-selector {
+      display: inline-flex;
+      background: #1e293b;
+      padding: 4px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      margin-bottom: 1.5rem;
+    }
+    .mode-btn {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      padding: 0.5rem 1.25rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .mode-btn.active {
+      background: #0284c7;
+      color: white;
+    }
+
+    .dropzone {
+      border: 2px dashed #38bdf8;
+      background: #1e293b;
+      padding: 3rem 1.5rem;
+      border-radius: 12px;
+      cursor: pointer;
+      max-width: 520px;
+      margin: 0 auto;
+      transition: background 0.2s, border-color 0.2s;
+      font-size: 1.05rem;
+    }
+    .dropzone:hover { background: #334155; border-color: #7dd3fc; }
+
+    .preview-grid {
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      margin-top: 2rem;
+      flex-wrap: wrap;
+    }
+    .preview-card {
+      background: #1e293b;
+      padding: 1.25rem;
+      border-radius: 12px;
+      border: 1px solid #334155;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 340px;
+    }
+    .img-box {
+      width: 300px;
+      height: 300px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+    img, canvas {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .checkerboard {
+      background: repeating-conic-gradient(#475569 0% 25%, #1e293b 0% 50%) 50% / 20px 20px;
+    }
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid #334155;
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    button.download {
+      background: #0284c7;
+      color: white;
+      padding: 0.75rem 1.5rem;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 1rem;
+      transition: background 0.2s;
+      width: 100%;
+    }
+    button.download:hover { background: #0369a1; }
+  </style>
+</head>
+<body>
+  <h1>PNG Maker App</h1>
+  <p class="subtitle">Extract subjects and create transparent PNGs directly in your browser</p>
+
+  <div class="mode-selector">
+    <button class="mode-btn active" id="modeGeneral" type="button">General / Photos (In-Browser AI)</button>
+    <button class="mode-btn" id="modeSignature" type="button">✍️ Signature / Document</button>
+  </div>
+
+  <div class="dropzone" id="dropzone">
+    📁 Click or drag & drop an image here
+  </div>
+  <input type="file" id="fileInput" accept="image/*" style="display: none;" />
+
+  <div class="preview-grid" id="previewArea" style="display: none;">
+    <div class="preview-card">
+      <h3>Original</h3>
+      <div class="img-box">
+        <img id="origImg" alt="Original Image" />
+      </div>
+    </div>
+    <div class="preview-card">
+      <h3>Cutout Result</h3>
+      <div class="img-box checkerboard" id="resultContainer">
+        <div class="spinner" id="loader"></div>
+        <img id="resultImg" style="display: none;" alt="Transparent PNG" />
+      </div>
+      <a id="downloadLink" download="cutout.png" style="width: 100%; display: none;">
+        <button class="download">Download PNG</button>
+      </a>
+    </div>
+  </div>
+
+  <!-- Load Transformers.js for client-side AI inference -->
+  <script type="module">
+    import { AutoModel, AutoProcessor, RawImage, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0';
+
+    env.allowLocalModels = false;
+
+    let segmenterModel = null;
+    let processor = null;
+    let currentMode = "general";
+
+    const modeGeneral = document.getElementById('modeGeneral');
+    const modeSignature = document.getElementById('modeSignature');
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const previewArea = document.getElementById('previewArea');
+    const origImg = document.getElementById('origImg');
+    const resultImg = document.getElementById('resultImg');
+    const loader = document.getElementById('loader');
+    const downloadLink = document.getElementById('downloadLink');
+
+    modeGeneral.onclick = () => {
+      currentMode = "general";
+      modeGeneral.classList.add("active");
+      modeSignature.classList.remove("active");
+    };
+
+    modeSignature.onclick = () => {
+      currentMode = "signature";
+      modeSignature.classList.add("active");
+      modeGeneral.classList.remove("active");
+    };
+
+    dropzone.onclick = () => fileInput.click();
+
+    dropzone.ondragover = (e) => { e.preventDefault(); };
+    dropzone.ondrop = (e) => {
+      e.preventDefault();
+      if (e.dataTransfer.files.length) {
+        fileInput.files = e.dataTransfer.files;
+        fileInput.dispatchEvent(new Event('change'));
+      }
+    };
+
+    async function loadAI() {
+      if (!segmenterModel) {
+        dropzone.innerText = "⏳ Loading in-browser AI model (first time only)...";
+        const model_id = 'briaai/RMBG-1.4';
+        segmenterModel = await AutoModel.from_pretrained(model_id, {
+          config: { model_type: 'custom' },
+        });
+        processor = await AutoProcessor.from_pretrained(model_id, {
+          config: {
+            do_normalize: true,
+            do_pad: false,
+            do_rescale: true,
+            do_resize: true,
+            image_mean: [0.5, 0.5, 0.5],
+            feature_extractor_type: "ImageFeatureExtractor",
+            image_std: [1, 1, 1],
+            resample: 2,
+            rescale_factor: 0.00392156862745098,
+            size: { width: 1024, height: 1024 },
+          }
+        });
+      }
+    }
+
+    // Client-side canvas processor for signatures
+    function processSignature(imageElement) {
+      const canvas = document.createElement('canvas');
+      canvas.width = imageElement.naturalWidth || imageElement.width;
+      canvas.height = imageElement.naturalHeight || imageElement.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(imageElement, 0, 0);
+
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = imgData.data;
+
+      const paperThreshold = 215;
+      const inkThreshold = 80;
+
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        let alpha = ((paperThreshold - luminance) / (paperThreshold - inkThreshold)) * 255;
+        alpha = Math.max(0, Math.min(255, alpha));
+        d[i + 3] = alpha;
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+      return canvas.toDataURL('image/png');
+    }
+
+    fileInput.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const objectUrl = URL.createObjectURL(file);
+      origImg.src = objectUrl;
+      previewArea.style.display = 'flex';
+      loader.style.display = 'block';
+      resultImg.style.display = 'none';
+      downloadLink.style.display = 'none';
+
+      try {
+        if (currentMode === "signature") {
+          dropzone.innerText = "⏳ Extracting signature ink strokes...";
+          origImg.onload = () => {
+            const resultUrl = processSignature(origImg);
+            resultImg.src = resultUrl;
+            downloadLink.href = resultUrl;
+            loader.style.display = 'none';
+            resultImg.style.display = 'block';
+            downloadLink.style.display = 'block';
+            dropzone.innerText = "✨ Done! Upload another image.";
+          };
+        } else {
+          dropzone.innerText = "⏳ Processing image cutout with AI...";
+          await loadAI();
+
+          const image = await RawImage.fromURL(objectUrl);
+          const { pixel_values } = await processor(image);
+          const { output } = await segmenterModel({ input: pixel_values });
+
+          const mask = await RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(image.width, image.height);
+
+          // Merge mask onto original image via canvas
+          const canvas = document.createElement('canvas');
+          canvas.width = image.width;
+          canvas.height = image.height;
+          const ctx = canvas.getContext('2d');
+
+          const rawCanvas = image.toCanvas();
+          ctx.drawImage(rawCanvas, 0, 0);
+
+          const pixelData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          for (let i = 0; i < mask.data.length; ++i) {
+            pixelData.data[4 * i + 3] = mask.data[i];
+          }
+          ctx.putImageData(pixelData, 0, 0);
+
+          const resultUrl = canvas.toDataURL('image/png');
+          resultImg.src = resultUrl;
+          downloadLink.href = resultUrl;
+
+          loader.style.display = 'none';
+          resultImg.style.display = 'block';
+          downloadLink.style.display = 'block';
+          dropzone.innerText = "✨ Done! Upload another image.";
+        }
+      } catch (err) {
+        console.error(err);
+        loader.style.display = 'none';
+        dropzone.innerText = "❌ Processing error. Please try another image.";
+      }
+    };
+  </script>
+</body>
+</html>
