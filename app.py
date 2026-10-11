@@ -8,7 +8,6 @@ from rembg import remove, new_session
 
 app = FastAPI(title="PNG Maker API")
 
-# Enable CORS for everyone (including GitHub Pages)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,9 +16,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Use the lightweight model so Render's 512MB RAM doesn't run out of memory
-# u2netp is the lightweight, fast version of u2net
-session = new_session("u2netp")
+# Global session variable - loaded lazily on demand
+session = None
+
+def get_session():
+    global session
+    if session is None:
+        session = new_session("u2netp")
+    return session
 
 @app.get("/")
 def home():
@@ -50,7 +54,8 @@ async def make_png(
 
             output_image = Image.fromarray(data, mode="RGBA")
         else:
-            output_image = remove(image, session=session)
+            model_session = get_session()
+            output_image = remove(image, session=model_session)
 
         output_bytes = io.BytesIO()
         output_image.save(output_bytes, format="PNG")
