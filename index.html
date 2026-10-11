@@ -80,7 +80,7 @@
       overflow: hidden;
       position: relative;
     }
-    img, canvas {
+    img {
       max-width: 100%;
       max-height: 100%;
       object-fit: contain;
@@ -116,10 +116,10 @@
 </head>
 <body>
   <h1>PNG Maker App</h1>
-  <p class="subtitle">Extract subjects and create transparent PNGs directly in your browser</p>
+  <p class="subtitle">Cloud-powered AI background removal & signature extractor</p>
 
   <div class="mode-selector">
-    <button class="mode-btn active" id="modeGeneral" type="button">General / Photos (In-Browser AI)</button>
+    <button class="mode-btn active" id="modeGeneral" type="button">General / Photos</button>
     <button class="mode-btn" id="modeSignature" type="button">✍️ Signature / Document</button>
   </div>
 
@@ -147,14 +147,9 @@
     </div>
   </div>
 
-  <!-- Load Transformers.js for client-side AI inference -->
-  <script type="module">
-    import { AutoModel, AutoProcessor, RawImage, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0';
+  <script>
+    const BACKEND_URL = "https://png-maker-backend.onrender.com";
 
-    env.allowLocalModels = false;
-
-    let segmenterModel = null;
-    let processor = null;
     let currentMode = "general";
 
     const modeGeneral = document.getElementById('modeGeneral');
@@ -190,118 +185,45 @@
       }
     };
 
-    async function loadAI() {
-      if (!segmenterModel) {
-        dropzone.innerText = "⏳ Loading in-browser AI model (first time only)...";
-        const model_id = 'briaai/RMBG-1.4';
-        segmenterModel = await AutoModel.from_pretrained(model_id, {
-          config: { model_type: 'custom' },
-        });
-        processor = await AutoProcessor.from_pretrained(model_id, {
-          config: {
-            do_normalize: true,
-            do_pad: false,
-            do_rescale: true,
-            do_resize: true,
-            image_mean: [0.5, 0.5, 0.5],
-            feature_extractor_type: "ImageFeatureExtractor",
-            image_std: [1, 1, 1],
-            resample: 2,
-            rescale_factor: 0.00392156862745098,
-            size: { width: 1024, height: 1024 },
-          }
-        });
-      }
-    }
-
-    // Client-side canvas processor for signatures
-    function processSignature(imageElement) {
-      const canvas = document.createElement('canvas');
-      canvas.width = imageElement.naturalWidth || imageElement.width;
-      canvas.height = imageElement.naturalHeight || imageElement.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(imageElement, 0, 0);
-
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const d = imgData.data;
-
-      const paperThreshold = 215;
-      const inkThreshold = 80;
-
-      for (let i = 0; i < d.length; i += 4) {
-        const r = d[i], g = d[i + 1], b = d[i + 2];
-        const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
-
-        let alpha = ((paperThreshold - luminance) / (paperThreshold - inkThreshold)) * 255;
-        alpha = Math.max(0, Math.min(255, alpha));
-        d[i + 3] = alpha;
-      }
-
-      ctx.putImageData(imgData, 0, 0);
-      return canvas.toDataURL('image/png');
-    }
-
     fileInput.onchange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
 
-      const objectUrl = URL.createObjectURL(file);
-      origImg.src = objectUrl;
+      origImg.src = URL.createObjectURL(file);
       previewArea.style.display = 'flex';
       loader.style.display = 'block';
       resultImg.style.display = 'none';
       downloadLink.style.display = 'none';
+      dropzone.innerText = "⏳ Processing image on cloud server...";
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("mode", currentMode);
 
       try {
-        if (currentMode === "signature") {
-          dropzone.innerText = "⏳ Extracting signature ink strokes...";
-          origImg.onload = () => {
-            const resultUrl = processSignature(origImg);
-            resultImg.src = resultUrl;
-            downloadLink.href = resultUrl;
-            loader.style.display = 'none';
-            resultImg.style.display = 'block';
-            downloadLink.style.display = 'block';
-            dropzone.innerText = "✨ Done! Upload another image.";
-          };
-        } else {
-          dropzone.innerText = "⏳ Processing image cutout with AI...";
-          await loadAI();
+        const response = await fetch(`${BACKEND_URL}/api/make-png`, {
+          method: "POST",
+          body: formData
+        });
 
-          const image = await RawImage.fromURL(objectUrl);
-          const { pixel_values } = await processor(image);
-          const { output } = await segmenterModel({ input: pixel_values });
-
-          const mask = await RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(image.width, image.height);
-
-          // Merge mask onto original image via canvas
-          const canvas = document.createElement('canvas');
-          canvas.width = image.width;
-          canvas.height = image.height;
-          const ctx = canvas.getContext('2d');
-
-          const rawCanvas = image.toCanvas();
-          ctx.drawImage(rawCanvas, 0, 0);
-
-          const pixelData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          for (let i = 0; i < mask.data.length; ++i) {
-            pixelData.data[4 * i + 3] = mask.data[i];
-          }
-          ctx.putImageData(pixelData, 0, 0);
-
-          const resultUrl = canvas.toDataURL('image/png');
-          resultImg.src = resultUrl;
-          downloadLink.href = resultUrl;
-
-          loader.style.display = 'none';
-          resultImg.style.display = 'block';
-          downloadLink.style.display = 'block';
-          dropzone.innerText = "✨ Done! Upload another image.";
+        if (!response.ok) {
+          throw new Error("Server failed to process image");
         }
+
+        const blob = await response.blob();
+        const resultUrl = URL.createObjectURL(blob);
+
+        resultImg.src = resultUrl;
+        downloadLink.href = resultUrl;
+
+        loader.style.display = 'none';
+        resultImg.style.display = 'block';
+        downloadLink.style.display = 'block';
+        dropzone.innerText = "✨ Done! Upload another image.";
       } catch (err) {
         console.error(err);
         loader.style.display = 'none';
-        dropzone.innerText = "❌ Processing error. Please try another image.";
+        dropzone.innerText = "❌ Processing error. Please try again.";
       }
     };
   </script>
