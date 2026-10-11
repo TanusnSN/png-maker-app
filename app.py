@@ -8,6 +8,7 @@ from rembg import remove, new_session
 
 app = FastAPI(title="PNG Maker API")
 
+# Enable CORS for frontend requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global session variable - loaded lazily on demand
+# Global session variable for lazy loading
 session = None
 
 def get_session():
@@ -25,7 +26,8 @@ def get_session():
         session = new_session("u2netp")
     return session
 
-@app.get("/")
+# Supports both GET and HEAD for Render's health checker
+@app.api_route("/", methods=["GET", "HEAD"])
 def home():
     return {"status": "ok", "message": "PNG Maker API is running on Render!"}
 
